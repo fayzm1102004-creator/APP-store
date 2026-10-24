@@ -165,7 +165,9 @@ public class ReviewService : IReviewService
 
         var buyerIds = pagedReviews.Select(r => r.BuyerId).Distinct().ToList();
         var buyers = (await _uow.Users.FindAsync(u => buyerIds.Contains(u.Id)))
-            .ToDictionary(u => u.Id, u => u.Name);
+            .ToDictionary(
+                u => u.Id,
+                u => (!u.IsActive || string.IsNullOrWhiteSpace(u.Name)) ? "مشتري" : u.Name);
 
         var reviewResponses = pagedReviews.Select(r => new ReviewResponse
         {

@@ -91,12 +91,37 @@ public class UserDataExportDto
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
+    public string? Phone { get; set; }
     public string Role { get; set; } = string.Empty;
     public DateTime ExportedAt { get; set; } = DateTime.UtcNow;
     public SellerProfileExportDto? SellerProfile { get; set; }
     public List<UserAddressExportDto> Addresses { get; set; } = new();
     public List<UserConsentExportDto> Consents { get; set; } = new();
+    public List<ReviewExportDto> Reviews { get; set; } = new();
+    public List<DeviceSessionExportDto> DeviceSessions { get; set; } = new();
     public List<OrderExportDto> Orders { get; set; } = new();
+}
+
+public class ReviewExportDto
+{
+    public int Id { get; set; }
+    public int ProductId { get; set; }
+    public int Rating { get; set; }
+    public string Comment { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+}
+
+public class DeviceSessionExportDto
+{
+    public int Id { get; set; }
+    public string DeviceId { get; set; } = string.Empty;
+    public string? DeviceName { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? LastUsedAt { get; set; }
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? RevokedAt { get; set; }
+    public bool IsActive { get; set; }
 }
 
 public class SellerProfileExportDto

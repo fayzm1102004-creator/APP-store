@@ -35,3 +35,22 @@ public class BadRequestException : AppException
 {
     public BadRequestException(string message) : base(message) { }
 }
+
+/// <summary>429 — rate limit or cooldown violated.</summary>
+public class TooManyRequestsException : AppException
+{
+    public TooManyRequestsException(string message) : base(message) { }
+}
+
+/// <summary>403 — account exists but is not verified.</summary>
+public class NotVerifiedException : AppException
+{
+    public string Target { get; }
+    public string Code => "NOT_VERIFIED";
+
+    public NotVerifiedException(string target, string message = "الحساب غير مؤكد. يرجى تأكيد البريد الإلكتروني أو رقم الهاتف.")
+        : base(message)
+    {
+        Target = target;
+    }
+}

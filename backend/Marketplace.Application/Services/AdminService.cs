@@ -39,7 +39,7 @@ public class AdminService : IAdminService
             {
                 Id = u.Id,
                 Name = u.Name,
-                Email = u.Email,
+                Email = u.Email ?? string.Empty,
                 Role = u.Role.ToString(),
                 IsActive = u.IsActive,
                 CreatedAt = u.CreatedAt,
@@ -57,7 +57,7 @@ public class AdminService : IAdminService
         }
 
         var user = await _uow.Users.GetByIdAsync(targetUserId);
-        if (user == null || user.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase))
+        if (user == null || (user.Email != null && user.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase)))
         {
             throw new NotFoundException($"User with ID {targetUserId} not found.");
         }
@@ -72,7 +72,7 @@ public class AdminService : IAdminService
         {
             Id = user.Id,
             Name = user.Name,
-            Email = user.Email,
+            Email = user.Email ?? string.Empty,
             Role = user.Role.ToString(),
             IsActive = user.IsActive,
             CreatedAt = user.CreatedAt,

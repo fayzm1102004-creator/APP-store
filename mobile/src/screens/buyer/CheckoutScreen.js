@@ -20,6 +20,7 @@ import { createOrder } from '../../api/ordersApi';
 import { getProductById } from '../../api/productsApi';
 import { getDeliveryCities, getPickupPoints, calculateDeliveryQuote } from '../../api/deliveryApi';
 import { getMyAddresses, getMyWallet } from '../../api/usersApi';
+import { getAppConfig } from '../../api/configApi';
 import { validateCoupon } from '../../api/couponsApi';
 import { formatCurrency } from '../../utils/currency';
 import { isValidEgyptianPhone, normalizeEgyptianPhone, formatEgyptianPhone } from '../../utils/egyptianPhone';
@@ -75,6 +76,8 @@ export default function CheckoutScreen({ route, navigation }) {
   const [walletBalance, setWalletBalance] = useState(0);
   const [useWalletBalance, setUseWalletBalance] = useState(false);
   const [loadingWallet, setLoadingWallet] = useState(false);
+  const [walletEnabled, setWalletEnabled] = useState(false);
+  const [couponsEnabled, setCouponsEnabled] = useState(false);
 
   // Saved addresses
   const [savedAddresses, setSavedAddresses] = useState([]);
@@ -149,13 +152,20 @@ export default function CheckoutScreen({ route, navigation }) {
       }
 
       try {
-        setLoadingWallet(true);
-        const walletRes = await getMyWallet();
-        if (walletRes?.data?.balance != null) {
-          setWalletBalance(Number(walletRes.data.balance));
+        const configRes = await getAppConfig();
+        if (configRes?.data) {
+          setCouponsEnabled(Boolean(configRes.data.couponsEnabled));
+          setWalletEnabled(Boolean(configRes.data.walletEnabled));
+          if (configRes.data.walletEnabled) {
+            setLoadingWallet(true);
+            const walletRes = await getMyWallet();
+            if (walletRes?.data?.balance != null) {
+              setWalletBalance(Number(walletRes.data.balance));
+            }
+          }
         }
       } catch (e) {
-        console.warn('Failed to load wallet:', e);
+        console.warn('Failed to load config/wallet:', e);
       } finally {
         setLoadingWallet(false);
       }
@@ -279,11 +289,11 @@ export default function CheckoutScreen({ route, navigation }) {
   const neededForFreeShipping = Math.max(0, freeShippingThreshold - itemsSubtotal);
 
   // Price totals
-  const couponDiscount = appliedCoupon ? Number(appliedCoupon.discountAmount) || 0 : 0;
+  const couponDiscount = (couponsEnabled && appliedCoupon) ? Number(appliedCoupon.discountAmount) || 0 : 0;
   const deliveryCostTotal = Number(quoteData?.totalDeliveryCost) || (deliveryMethod === 'Pickup' ? 35 : 50);
   const subtotalAfterCoupon = Math.max(0, itemsSubtotal - couponDiscount);
   const totalBeforeWallet = subtotalAfterCoupon + deliveryCostTotal;
-  const walletDeduction = useWalletBalance ? Math.min(walletBalance, totalBeforeWallet) : 0;
+  const walletDeduction = (walletEnabled && useWalletBalance) ? Math.min(walletBalance, totalBeforeWallet) : 0;
   const grandTotal = Math.max(0, totalBeforeWallet - walletDeduction);
 
   const handleConfirmOrder = async () => {
@@ -337,8 +347,8 @@ export default function CheckoutScreen({ route, navigation }) {
       area: deliveryMethod === 'Courier' ? area.trim() : (isRTL ? 'نقطة استلام' : 'Pickup Point'),
       streetBuilding: deliveryMethod === 'Courier' ? streetBuilding.trim() : (isRTL ? 'استلام من الفرع' : 'Branch Pickup'),
       paymentMethod: 'CashOnDelivery',
-      couponCode: appliedCoupon?.code || null,
-      useWalletBalance: useWalletBalance,
+      couponCode: (couponsEnabled && appliedCoupon?.code) ? appliedCoupon.code : null,
+      useWalletBalance: walletEnabled ? useWalletBalance : false,
     };
 
     try {
@@ -987,6 +997,7 @@ export default function CheckoutScreen({ route, navigation }) {
         </View>
 
         {/* Promo Code / Coupon Engine Card */}
+        {couponsEnabled && (
         <View
           style={[
             cardShadow,
@@ -1071,8 +1082,10 @@ export default function CheckoutScreen({ route, navigation }) {
             </View>
           )}
         </View>
+        )}
 
         {/* Buyer Wallet (Store Credit) Balance Card */}
+        {walletEnabled && (
         <View
           style={[
             cardShadow,
@@ -1124,6 +1137,7 @@ export default function CheckoutScreen({ route, navigation }) {
             </View>
           )}
         </View>
+        )}
 
         {/* 6. Pricing Breakdown */}
         <View
@@ -1157,7 +1171,7 @@ export default function CheckoutScreen({ route, navigation }) {
             </Text>
           </View>
 
-          {couponDiscount > 0 && (
+          {couponsEnabled && couponDiscount > 0 && (
             <View style={tw`flex-row items-center justify-between mb-2`}>
               <Text style={[tw`text-sm font-semibold`, { color: colors.newBadge }]}>
                 {isRTL ? `خصم الكوبون (${appliedCoupon?.code})` : `Coupon Discount (${appliedCoupon?.code})`}
@@ -1168,7 +1182,7 @@ export default function CheckoutScreen({ route, navigation }) {
             </View>
           )}
 
-          {walletDeduction > 0 && (
+          {walletEnabled && walletDeduction > 0 && (
             <View style={tw`flex-row items-center justify-between mb-2`}>
               <Text style={[tw`text-sm font-semibold`, { color: colors.newBadge }]}>
                 {t('checkout.walletDeduction')}

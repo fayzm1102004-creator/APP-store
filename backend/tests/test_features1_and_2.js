@@ -47,7 +47,7 @@ async function runTests() {
     console.log('\n--- 1. Testing Admin Authentication & RBAC ---');
     const adminLoginRes = await request('POST', '/api/auth/login', {
         email: 'admin@marketplace.eg',
-        password: 'Admin123!'
+        password: process.env.ADMIN_PASSWORD || 'AdminSecurePassword123!'
     });
     assert(adminLoginRes.status === 200, 'Admin logged in successfully (HTTP 200)');
     const adminToken = adminLoginRes.data.token;

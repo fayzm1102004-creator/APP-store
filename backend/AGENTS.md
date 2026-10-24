@@ -1,5 +1,18 @@
 # Egyptian Marketplace Implementation Instructions
 
+## Project Paths
+- **Repository Root**: `D:\Backend\marketplace`
+- **Backend Project Folder**: `D:\Backend\marketplace\backend`
+- **Mobile Project Folder**: `D:\Backend\marketplace\mobile`
+
+## Global Rules
+1. Work only in the single unified project folders (`D:\Backend\marketplace\backend` and `D:\Backend\marketplace\mobile`).
+2. NEVER run database commands (no `dotnet ef database update/drop`, `psql`, `pg_dump`). Generate migrations only, show the SQL for the user to apply.
+3. Tests run only against the database named in the env var `TEST_DB` (or InMemory).
+4. Do NOT deploy anything; the hosting platform is paused. Local work only.
+5. Never print or commit secrets. Secrets come from environment variables.
+6. Execute ONE stage at a time. After each stage report: files changed, endpoints added, raw test output, and what could NOT be verified. Then STOP and wait for confirmation.
+
 ## Target Market & Architecture Rules — All Phases
 
 - **Market & Jurisdiction**: Egypt (جمهورية مصر العربية). Regulated under Egyptian Law, including the Personal Data Protection Law (PDPL 151/2020). Production database and services storing personal data must be hosted inside Egypt. No foreign SaaS for personal data.

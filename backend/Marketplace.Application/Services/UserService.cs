@@ -31,7 +31,7 @@ public class UserService : IUserService
     public async Task<UserProfileResponse> GetProfileAsync(int userId)
     {
         var user = await _uow.Users.GetByIdAsync(userId);
-        if (user == null || user.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase))
+        if (user == null || !user.IsActive || (user.Email != null && user.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase)) || (user.Email == null && user.Phone == null))
             throw new NotFoundException($"User with ID {userId} not found.");
 
         var sellerProfile = (await _uow.SellerProfiles.FindAsync(sp => sp.UserId == userId)).FirstOrDefault();
@@ -40,7 +40,7 @@ public class UserService : IUserService
         {
             Id = user.Id,
             Name = user.Name,
-            Email = user.Email,
+            Email = user.Email ?? string.Empty,
             Role = user.Role.ToString(),
             DispatchCity = sellerProfile?.DispatchCity,
             DispatchAddress = sellerProfile?.DispatchAddress,
@@ -95,7 +95,7 @@ public class UserService : IUserService
         {
             Id = user.Id,
             Name = user.Name,
-            Email = user.Email,
+            Email = user.Email ?? string.Empty,
             Role = user.Role.ToString(),
             DispatchCity = sellerProfile?.DispatchCity,
             DispatchAddress = sellerProfile?.DispatchAddress,
@@ -173,7 +173,16 @@ public class UserService : IUserService
         }
 
         user.PasswordHash = _hasher.Hash(request.NewPassword);
+        user.TokenVersion++;
         _uow.Users.Update(user);
+
+        var activeTokens = await _uow.RefreshTokens.FindAsync(r => r.UserId == userId && r.RevokedAt == null);
+        foreach (var t in activeTokens)
+        {
+            t.RevokedAt = DateTime.UtcNow;
+            _uow.RefreshTokens.Update(t);
+        }
+
         await _uow.SaveChangesAsync();
     }
 
@@ -333,12 +342,18 @@ public class UserService : IUserService
         var sellerProfile = (await _uow.SellerProfiles.FindAsync(sp => sp.UserId == userId)).FirstOrDefault();
         var addresses = (await _uow.UserAddresses.FindAsync(a => a.UserId == userId)).ToList();
         var consents = (await _uow.UserConsents.FindAsync(c => c.UserId == userId)).ToList();
+        var reviews = (await _uow.Reviews.FindAsync(r => r.BuyerId == userId)).ToList();
+        var refreshTokens = (await _uow.RefreshTokens.FindAsync(r => r.UserId == userId)).ToList();
 
         var orders = (await _uow.Orders.FindAsync(o => o.BuyerId == userId)).ToList();
         var orderIds = orders.Select(o => o.Id).ToList();
 
-        var allShipments = (await _uow.Shipments.FindAsync(s => orderIds.Contains(s.OrderId))).ToList();
-        var allItems = (await _uow.OrderItems.FindAsync(i => orderIds.Contains(i.OrderId))).ToList();
+        var allShipments = orderIds.Count > 0
+            ? (await _uow.Shipments.FindAsync(s => orderIds.Contains(s.OrderId))).ToList()
+            : new List<Shipment>();
+        var allItems = orderIds.Count > 0
+            ? (await _uow.OrderItems.FindAsync(i => orderIds.Contains(i.OrderId))).ToList()
+            : new List<OrderItem>();
 
         var orderExports = orders.Select(o =>
         {
@@ -381,13 +396,16 @@ public class UserService : IUserService
             };
         }).ToList();
 
+        var now = DateTime.UtcNow;
+
         return new UserDataExportDto
         {
             Id = user.Id,
             Name = user.Name,
-            Email = user.Email,
+            Email = user.Email ?? string.Empty,
+            Phone = user.Phone,
             Role = user.Role.ToString(),
-            ExportedAt = DateTime.UtcNow,
+            ExportedAt = now,
             SellerProfile = sellerProfile == null ? null : new SellerProfileExportDto
             {
                 DispatchCity = sellerProfile.DispatchCity,
@@ -413,6 +431,27 @@ public class UserService : IUserService
                 AcceptedAt = c.AcceptedAt,
                 MarketingConsent = c.MarketingConsent
             }).ToList(),
+            Reviews = reviews.Select(r => new ReviewExportDto
+            {
+                Id = r.Id,
+                ProductId = r.ProductId,
+                Rating = r.Rating,
+                Comment = r.Comment,
+                CreatedAt = r.CreatedAt,
+                UpdatedAt = r.UpdatedAt
+            }).ToList(),
+            // Device sessions exported WITHOUT TokenHash
+            DeviceSessions = refreshTokens.Select(rt => new DeviceSessionExportDto
+            {
+                Id = rt.Id,
+                DeviceId = rt.DeviceId,
+                DeviceName = rt.DeviceName,
+                CreatedAt = rt.CreatedAt,
+                LastUsedAt = rt.LastUsedAt,
+                ExpiresAt = rt.ExpiresAt,
+                RevokedAt = rt.RevokedAt,
+                IsActive = rt.RevokedAt == null && rt.ExpiresAt > now
+            }).ToList(),
             Orders = orderExports
         };
     }
@@ -420,7 +459,7 @@ public class UserService : IUserService
     public async Task DeleteAccountAsync(int userId, string? currentPassword = null, string? googleIdToken = null)
     {
         var user = await _uow.Users.GetByIdAsync(userId);
-        if (user == null || user.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase))
+        if (user == null || !user.IsActive || (user.Email != null && user.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase)) || (user.Email == null && user.Phone == null))
             throw new NotFoundException($"User with ID {userId} not found.");
 
         if (!string.IsNullOrWhiteSpace(googleIdToken))
@@ -464,9 +503,15 @@ public class UserService : IUserService
             }
         }
 
-        // Check active shipments as seller
+        // Seller 409 Conflict guards: active products, open shipments, or wallet/payout balance
         if (user.Role == UserRole.Seller)
         {
+            var sellerProducts = (await _uow.Products.FindAsync(p => p.SellerId == userId)).ToList();
+            if (sellerProducts.Any())
+            {
+                throw new ConflictException("لا يمكن حذف حساب التاجر طالما توجد منتجات نشطة مرتبطة بالحساب.");
+            }
+
             var sellerShipments = await _uow.Shipments.FindAsync(s => s.SellerId == userId);
             bool hasActiveSellerShipments = sellerShipments.Any(s =>
                 s.Status != ShipmentStatus.Delivered &&
@@ -477,35 +522,127 @@ public class UserService : IUserService
             {
                 throw new ConflictException("لا يمكن حذف حساب التاجر نظراً لوجود شحنات قيد التوصيل لم تكتمل بعد.");
             }
+
+            var vendorWallet = (await _uow.VendorWallets.FindAsync(w => w.SellerId == userId)).FirstOrDefault();
+            if (vendorWallet != null && (vendorWallet.Balance > 0 || vendorWallet.PendingBalance > 0))
+            {
+                throw new ConflictException("لا يمكن حذف حساب التاجر لوجود رصيد متاح أو معلق في المحفظة.");
+            }
+
+            var openPayouts = await _uow.PayoutRequests.FindAsync(p =>
+                p.SellerId == userId &&
+                p.Status == PayoutStatus.Pending);
+            if (openPayouts.Any())
+            {
+                throw new ConflictException("لا يمكن حذف حساب التاجر لوجود طلبات سحب أرباح قيد المعالجة.");
+            }
         }
 
-        // Anonymization: overwrite PII with unique placeholders, revoke login credentials, keep order/shipment audit history
-        var anonId = Guid.NewGuid().ToString("N")[..8];
-        user.Name = $"Deleted User {userId}-{anonId}";
-        user.Email = $"deleted_{userId}_{anonId}@marketplace.local";
+        // Scrub PII on buyer's Orders (keep Governorate, City, totals, and items)
+        foreach (var order in buyerOrders)
+        {
+            order.RecipientName = string.Empty;
+            order.RecipientPhone = string.Empty;
+            order.Area = string.Empty;
+            order.StreetBuilding = string.Empty;
+            _uow.Orders.Update(order);
+        }
+
+        // Anonymize user reviews' display name (via user.Name = "" and IsActive = false)
+        // and scrub any uploaded review/return defect photo URLs and local files
+        var userReturns = (await _uow.ReturnRequests.FindAsync(r => r.BuyerId == userId)).ToList();
+        foreach (var ret in userReturns)
+        {
+            if (!string.IsNullOrWhiteSpace(ret.DefectImageUrl))
+            {
+                TryDeleteUploadedFile(ret.DefectImageUrl);
+                ret.DefectImageUrl = null;
+                _uow.ReturnRequests.Update(ret);
+            }
+        }
+
+        var userReviews = (await _uow.Reviews.FindAsync(r => r.BuyerId == userId)).ToList();
+        foreach (var rev in userReviews)
+        {
+            // If review comment or metadata embedded any local upload URLs (/uploads/reviews/...), delete them
+            if (!string.IsNullOrWhiteSpace(rev.Comment) && rev.Comment.Contains("/uploads/", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var token in rev.Comment.Split(' ', '\n', '\r', '\t', '"', '\''))
+                {
+                    if (token.Contains("/uploads/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        TryDeleteUploadedFile(token);
+                    }
+                }
+            }
+        }
+
+        // Anonymization: clear PII, set Email and Phone to null, deactivate account, randomize password hash, bump TokenVersion
+        user.Name = string.Empty;
+        user.Email = null;
+        user.Phone = null;
+        user.IsActive = false;
         user.PasswordHash = _hasher.Hash(Guid.NewGuid().ToString("N")); // Completely invalidates login
+        user.TokenVersion++;
         _uow.Users.Update(user);
 
-        // Anonymize user addresses
+        // Delete user's verification codes
+        var userCodes = (await _uow.VerificationCodes.FindAsync(c => c.UserId == userId)).ToList();
+        foreach (var c in userCodes)
+        {
+            _uow.VerificationCodes.Remove(c);
+        }
+
+        // Remove user refresh tokens
+        var userRefreshTokens = (await _uow.RefreshTokens.FindAsync(r => r.UserId == userId)).ToList();
+        foreach (var t in userRefreshTokens)
+        {
+            _uow.RefreshTokens.Remove(t);
+        }
+
+        // Remove user device push tokens
+        var userPushTokens = (await _uow.UserDeviceTokens.FindAsync(d => d.UserId == userId)).ToList();
+        foreach (var pt in userPushTokens)
+        {
+            _uow.UserDeviceTokens.Remove(pt);
+        }
+
+        // Remove user addresses completely
         var addresses = (await _uow.UserAddresses.FindAsync(a => a.UserId == userId)).ToList();
         foreach (var addr in addresses)
         {
-            addr.RecipientName = "مستخدم محذوف";
-            addr.RecipientPhone = "+200000000000";
-            addr.StreetBuilding = "تم حذف البيانات الشخصية";
-            _uow.UserAddresses.Update(addr);
+            _uow.UserAddresses.Remove(addr);
         }
 
         // Anonymize seller profile if exists
         var sellerProfile = (await _uow.SellerProfiles.FindAsync(sp => sp.UserId == userId)).FirstOrDefault();
         if (sellerProfile != null)
         {
-            sellerProfile.ContactPhone = "+200000000000";
-            sellerProfile.DispatchAddress = "تم حذف البيانات الشخصية";
+            sellerProfile.ContactPhone = null;
+            sellerProfile.DispatchAddress = null;
             _uow.SellerProfiles.Update(sellerProfile);
         }
 
         await _uow.SaveChangesAsync();
+    }
+
+    private static void TryDeleteUploadedFile(string urlOrPath)
+    {
+        try
+        {
+            var idx = urlOrPath.IndexOf("/uploads/", StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) return;
+            var relative = urlOrPath[(idx + 1)..].Replace('/', Path.DirectorySeparatorChar);
+            var fullPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", relative);
+            if (File.Exists(fullPath))
+            {
+                File.Delete(fullPath);
+            }
+        }
+        catch
+        {
+            // Ignore file deletion errors during account cleanup
+        }
     }
 
     public async Task<SellerDashboardResponse> GetSellerDashboardAsync(int sellerId)
@@ -788,7 +925,7 @@ public class UserService : IUserService
         {
             BuyerId = buyer.Id,
             BuyerName = buyer.Name,
-            Email = buyer.Email,
+            Email = buyer.Email ?? string.Empty,
             ProcessingCount = processingCount,
             InTransitCount = inTransitCount,
             ReadyForPickupCount = readyForPickupCount,

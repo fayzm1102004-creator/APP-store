@@ -1,3 +1,4 @@
+import { getAppConfig } from '../../api/configApi';
 import tw from 'twrnc';
 import React, { useState, useEffect, useContext, useCallback } from 'react';
 import {
@@ -41,6 +42,8 @@ import { changeAppLanguage } from '../../locales/i18n';
 import { isValidEgyptianPhone, formatEgyptianPhone } from '../../utils/egyptianPhone';
 import { formatCurrency } from '../../utils/currency';
 import { colors } from '../../theme/colors';
+import { checkBiometricSupport, promptBiometricAuth } from '../../utils/biometrics';
+import { isBiometricsEnabled, setBiometricsEnabled, removeRefreshToken } from '../../utils/storage';
 
 const cardShadow = Platform.select({
   ios: {
@@ -73,7 +76,9 @@ const formatDate = (dateStr) => {
 
 export default function ProfileScreen({ navigation }) {
   const { t, i18n } = useTranslation();
-  const { logout, reloadUser } = useContext(AuthContext);
+  const { logout, reloadUser, userId } = useContext(AuthContext);
+  const [biometricSupport, setBiometricSupport] = useState({ available: false });
+  const [biometricsEnabled, setBiometricsEnabledState] = useState(false);
   const isFocused = useIsFocused();
   const isArabicActive = i18n.language?.startsWith('ar');
   const isRTL = isArabicActive;
@@ -149,6 +154,7 @@ export default function ProfileScreen({ navigation }) {
   // Buyer Wallet (Store Credit) State
   const [walletData, setWalletData] = useState({ balance: 0, transactions: [] });
   const [showWalletModal, setShowWalletModal] = useState(false);
+  const [walletEnabled, setWalletEnabled] = useState(false);
 
   const loadData = useCallback(async (isPull = false) => {
     try {
@@ -168,17 +174,25 @@ export default function ProfileScreen({ navigation }) {
         if (u.role === 'Seller') {
           loadSellerProfile();
         } else {
-          // Fetch Buyer Dashboard & Wallet
+          // Fetch Buyer Dashboard & Config/Wallet
           try {
-            const [bDashRes, walletRes] = await Promise.allSettled([
+            const [bDashRes, configRes] = await Promise.allSettled([
               getBuyerDashboard(),
-              getMyWallet(),
+              getAppConfig(),
             ]);
             if (bDashRes.status === 'fulfilled' && bDashRes.value?.data) {
               setBuyerDashboard(bDashRes.value.data);
             }
-            if (walletRes.status === 'fulfilled' && walletRes.value?.data) {
-              setWalletData(walletRes.value.data);
+            if (configRes.status === 'fulfilled' && configRes.value?.data?.walletEnabled) {
+              setWalletEnabled(true);
+              try {
+                const walletRes = await getMyWallet();
+                if (walletRes?.data) {
+                  setWalletData(walletRes.data);
+                }
+              } catch (we) {
+                console.warn('Failed to load wallet data', we);
+              }
             }
           } catch (e) {
             console.error('Failed to load buyer dashboard/wallet', e);
@@ -220,6 +234,49 @@ export default function ProfileScreen({ navigation }) {
       loadData();
     }
   }, [isFocused, loadData]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadBiometrics = async () => {
+      const support = await checkBiometricSupport();
+      if (isMounted) {
+        setBiometricSupport(support);
+      }
+      if (userId && isMounted) {
+        const enabled = await isBiometricsEnabled(userId);
+        if (isMounted) {
+          setBiometricsEnabledState(enabled);
+        }
+      }
+    };
+    loadBiometrics();
+    return () => {
+      isMounted = false;
+    };
+  }, [userId, isFocused]);
+
+  const handleToggleBiometrics = async (value) => {
+    if (!userId) return;
+
+    if (value) {
+      const promptRes = await promptBiometricAuth({
+        promptMessage: t('biometrics.authenticateToEnable', 'تأكيد البصمة لتفعيل الميزة'),
+        fallbackLabel: t('biometrics.usePasscode', 'استخدم رمز الهاتف'),
+      });
+
+      if (promptRes.success) {
+        await setBiometricsEnabled(userId, true);
+        setBiometricsEnabledState(true);
+        Alert.alert(t('common.success', 'تم بنجاح'), t('biometrics.enabledSuccess', 'تم تفعيل الدخول بالبصمة بنجاح'));
+      } else {
+        setBiometricsEnabledState(false);
+      }
+    } else {
+      await setBiometricsEnabled(userId, false);
+      setBiometricsEnabledState(false);
+      Alert.alert(t('common.success', 'تم بنجاح'), t('biometrics.disabledSuccess', 'تم إيقاف الدخول بالبصمة'));
+    }
+  };
 
   const handleSaveName = async () => {
     const trimmed = nameInput.trim();
@@ -267,7 +324,12 @@ export default function ProfileScreen({ navigation }) {
       setNewPassword('');
       setConfirmPassword('');
       setIsChangingPassword(false);
-      Alert.alert(t('common.save'), t('profile.passwordChanged'));
+      if (userId) {
+        await removeRefreshToken(userId);
+      }
+      Alert.alert(t('common.success', 'تم بنجاح'), t('profile.passwordChanged'), [
+        { text: t('common.ok', 'حسناً'), onPress: () => logout() }
+      ]);
     } catch (err) {
       const msg = err?.response?.data?.error || err?.message || t('common.error');
       Alert.alert(t('common.error'), msg);
@@ -439,6 +501,9 @@ export default function ProfileScreen({ navigation }) {
     try {
       setDeletingAccount(true);
       await deleteMyAccount(deletePasswordInput);
+      if (userId) {
+        await removeRefreshToken(userId);
+      }
       setDeleteAccountModalVisible(false);
       Alert.alert(
         isRTL ? 'تم حذف الحساب' : 'Account Deleted',
@@ -704,6 +769,7 @@ export default function ProfileScreen({ navigation }) {
             </View>
 
             {/* ─── 2.5 Buyer Wallet (Store Credit) Balance Card ─── */}
+            {walletEnabled && (
             <View
               style={[
                 tw`rounded-2xl p-4 mb-3 border`,
@@ -741,6 +807,7 @@ export default function ProfileScreen({ navigation }) {
                 {t('profile.buyerWalletNotice')}
               </Text>
             </View>
+            )}
 
             {/* ─── 3. Live Active Shipment Pin ─── */}
             {activeShipment && (
@@ -1054,16 +1121,55 @@ export default function ProfileScreen({ navigation }) {
           </View>
         )}
 
-        {/* 4. Password & Security Accordion */}
+        {/* 4. Password & Biometric Security Accordion */}
         <View style={[styles.serviceCard, cardShadow, tw`mt-3`]}>
+          {/* Biometrics Toggle / Unavailable Notice */}
+          <View style={tw`mb-3 pb-3 border-b border-gray-100`}>
+            <View style={tw`flex-row items-center mb-2.5`}>
+              <View style={[styles.serviceIconWrap, { backgroundColor: '#F1F5F9' }]}>
+                <MaterialCommunityIcons name="shield-lock-outline" size={22} color={colors.primary} />
+              </View>
+              <Text style={[styles.serviceTitle, isRTL ? tw`mr-2.5` : tw`ml-2.5`]}>
+                {t('biometrics.securitySection', 'الأمان والدخول البيومتري')}
+              </Text>
+            </View>
+
+            {biometricSupport.available ? (
+              <View style={tw`flex-row items-center justify-between py-1`}>
+                <View style={tw`flex-1 ${isRTL ? 'ml-3' : 'mr-3'}`}>
+                  <Text style={[styles.fieldLabel, { marginBottom: 2, textAlign: isRTL ? 'right' : 'left' }]}>
+                    {t('biometrics.biometricToggleTitle', 'تسجيل الدخول بالبصمة')}
+                  </Text>
+                  <Text style={[tw`text-xs text-gray-500`, { textAlign: isRTL ? 'right' : 'left' }]}>
+                    {t('biometrics.biometricToggleSubtitle', 'استخدم بصمة الإصبع أو الوجه لفتح التطبيق وتسجيل الدخول')}
+                  </Text>
+                </View>
+                <Switch
+                  value={biometricsEnabled}
+                  onValueChange={handleToggleBiometrics}
+                  trackColor={{ false: '#CBD5E1', true: colors.primary }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+            ) : (
+              <View style={tw`p-2.5 bg-gray-50 rounded-lg flex-row items-center`}>
+                <MaterialCommunityIcons name="fingerprint-off" size={20} color="#94A3B8" />
+                <Text style={[tw`text-xs text-gray-500 flex-1`, isRTL ? tw`mr-2` : tw`ml-2`, { textAlign: isRTL ? 'right' : 'left' }]}>
+                  {t(biometricSupport.messageKey || 'biometrics.hardwareUnavailable')}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* Change Password Accordion Header */}
           <TouchableOpacity
             style={tw`flex-row items-center justify-between`}
             onPress={() => setIsChangingPassword((p) => !p)}
             activeOpacity={0.8}
           >
             <View style={tw`flex-row items-center`}>
-              <View style={[styles.serviceIconWrap, { backgroundColor: '#F1F5F9' }]}>
-                <MaterialCommunityIcons name="lock-outline" size={22} color={colors.primary} />
+              <View style={[styles.serviceIconWrap, { backgroundColor: '#F8FAFC' }]}>
+                <MaterialCommunityIcons name="lock-outline" size={20} color={colors.primary} />
               </View>
               <Text style={[styles.serviceTitle, isRTL ? tw`mr-2.5` : tw`ml-2.5`]}>{t('profile.changePassword')}</Text>
             </View>

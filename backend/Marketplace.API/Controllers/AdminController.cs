@@ -14,12 +14,21 @@ public class AdminController : ControllerBase
 {
     private readonly IAdminService _adminService;
     private readonly IWalletService _walletService;
+    private readonly IConfiguration _configuration;
 
-    public AdminController(IAdminService adminService, IWalletService walletService)
+    public AdminController(
+        IAdminService adminService,
+        IWalletService walletService,
+        IConfiguration configuration)
     {
         _adminService = adminService;
         _walletService = walletService;
+        _configuration = configuration;
     }
+
+    private bool IsWalletEnabled =>
+        _configuration.GetValue<bool>("Features:WalletEnabled", false) ||
+        _configuration.GetValue<bool>("Wallet:Enabled", false);
 
     /// <summary>List platform users with optional role and status filters. (Admin only)</summary>
     [HttpGet("users")]
@@ -64,8 +73,11 @@ public class AdminController : ControllerBase
     [ProducesResponseType(typeof(IEnumerable<PayoutRequestResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<IEnumerable<PayoutRequestResponse>>> GetPayouts([FromQuery] string? status = null)
     {
+        if (!IsWalletEnabled) return NotFound(new { error = "Wallet feature is disabled." });
+
         var payouts = await _walletService.GetAllPayoutRequestsAsync(status);
         return Ok(payouts);
     }
@@ -79,6 +91,8 @@ public class AdminController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PayoutRequestResponse>> ProcessPayout(int id, [FromBody] ProcessPayoutRequest request)
     {
+        if (!IsWalletEnabled) return NotFound(new { error = "Wallet feature is disabled." });
+
         var processed = await _walletService.ProcessPayoutAsync(id, request);
         return Ok(processed);
     }

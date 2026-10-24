@@ -3,6 +3,7 @@ using Marketplace.Application.DTOs.Products;
 using Marketplace.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Marketplace.API.Controllers;
 
@@ -23,6 +24,7 @@ public class ProductsController : ControllerBase
     /// <summary>Upload a product image. (Seller only)</summary>
     [HttpPost("upload-image")]
     [Authorize(Roles = "Seller")]
+    [EnableRateLimiting("upload-policy")]
     [Consumes("multipart/form-data")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

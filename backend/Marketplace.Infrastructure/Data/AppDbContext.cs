@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Marketplace.Domain.Entities;
 using Marketplace.Domain.Enums;
 
@@ -8,12 +7,6 @@ namespace Marketplace.Infrastructure.Data;
 public class AppDbContext : DbContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
-
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-    {
-        base.OnConfiguring(optionsBuilder);
-        optionsBuilder.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
-    }
 
     public DbSet<User> Users => Set<User>();
     public DbSet<SellerProfile> SellerProfiles => Set<SellerProfile>();
@@ -35,6 +28,8 @@ public class AppDbContext : DbContext
     public DbSet<ReturnRequest> ReturnRequests => Set<ReturnRequest>();
     public DbSet<BuyerWallet> BuyerWallets => Set<BuyerWallet>();
     public DbSet<BuyerWalletTransaction> BuyerWalletTransactions => Set<BuyerWalletTransaction>();
+    public DbSet<VerificationCode> VerificationCodes => Set<VerificationCode>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -50,11 +45,30 @@ public class AppDbContext : DbContext
                 .HasMaxLength(100);
 
             entity.Property(u => u.Email)
-                .IsRequired()
+                .IsRequired(false)
                 .HasMaxLength(200);
 
             entity.HasIndex(u => u.Email)
-                .IsUnique();
+                .IsUnique()
+                .HasFilter("\"Email\" IS NOT NULL");
+
+            entity.Property(u => u.Phone)
+                .IsRequired(false)
+                .HasMaxLength(20);
+
+            entity.HasIndex(u => u.Phone)
+                .IsUnique()
+                .HasFilter("\"Phone\" IS NOT NULL");
+
+            entity.Property(u => u.EmailVerifiedAt)
+                .IsRequired(false);
+
+            entity.Property(u => u.PhoneVerifiedAt)
+                .IsRequired(false);
+
+            entity.Property(u => u.TokenVersion)
+                .IsRequired()
+                .HasDefaultValue(0);
 
             entity.Property(u => u.PasswordHash)
                 .IsRequired();
@@ -70,6 +84,55 @@ public class AppDbContext : DbContext
 
             entity.Property(u => u.CreatedAt)
                 .IsRequired();
+        });
+
+        // --- VerificationCode ------------------------------------
+        modelBuilder.Entity<VerificationCode>(entity =>
+        {
+            entity.HasKey(vc => vc.Id);
+
+            entity.Property(vc => vc.UserId)
+                .IsRequired();
+
+            entity.Property(vc => vc.Channel)
+                .IsRequired()
+                .HasConversion<string>()
+                .HasMaxLength(20);
+
+            entity.Property(vc => vc.Target)
+                .IsRequired()
+                .HasMaxLength(200);
+
+            entity.Property(vc => vc.Purpose)
+                .IsRequired()
+                .HasConversion<string>()
+                .HasMaxLength(50);
+
+            entity.Property(vc => vc.CodeHash)
+                .IsRequired()
+                .HasMaxLength(256);
+
+            entity.Property(vc => vc.ExpiresAt)
+                .IsRequired();
+
+            entity.Property(vc => vc.AttemptCount)
+                .IsRequired()
+                .HasDefaultValue(0);
+
+            entity.Property(vc => vc.ConsumedAt)
+                .IsRequired(false);
+
+            entity.Property(vc => vc.CreatedAt)
+                .IsRequired();
+
+            entity.HasIndex(vc => vc.Target);
+            entity.HasIndex(vc => vc.UserId);
+            entity.HasIndex(vc => vc.ExpiresAt);
+
+            entity.HasOne(vc => vc.User)
+                .WithMany(u => u.VerificationCodes)
+                .HasForeignKey(vc => vc.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // --- SellerProfile ---------------------------------------
@@ -805,6 +868,58 @@ public class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(t => t.ReturnRequestId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // --- RefreshToken ----------------------------------------
+        modelBuilder.Entity<RefreshToken>(entity =>
+        {
+            entity.HasKey(r => r.Id);
+
+            entity.Property(r => r.UserId)
+                .IsRequired();
+
+            entity.Property(r => r.TokenHash)
+                .IsRequired()
+                .HasMaxLength(64);
+
+            entity.HasIndex(r => r.TokenHash)
+                .IsUnique();
+
+            entity.Property(r => r.DeviceId)
+                .IsRequired()
+                .HasMaxLength(100);
+
+            entity.Property(r => r.DeviceName)
+                .IsRequired(false)
+                .HasMaxLength(100);
+
+            entity.Property(r => r.CreatedAt)
+                .IsRequired();
+
+            entity.Property(r => r.ExpiresAt)
+                .IsRequired();
+
+            entity.Property(r => r.LastUsedAt)
+                .IsRequired(false);
+
+            entity.Property(r => r.RevokedAt)
+                .IsRequired(false);
+
+            entity.Property(r => r.ReplacedByTokenId)
+                .IsRequired(false);
+
+            entity.HasIndex(r => r.UserId);
+            entity.HasIndex(r => new { r.UserId, r.DeviceId });
+
+            entity.HasOne(r => r.User)
+                .WithMany(u => u.RefreshTokens)
+                .HasForeignKey(r => r.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(r => r.ReplacedByToken)
+                .WithMany()
+                .HasForeignKey(r => r.ReplacedByTokenId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

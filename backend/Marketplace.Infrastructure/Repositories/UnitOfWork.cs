@@ -34,6 +34,8 @@ public class UnitOfWork : IUnitOfWork
         ReturnRequests = new Repository<ReturnRequest>(context);
         BuyerWallets = new Repository<BuyerWallet>(context);
         BuyerWalletTransactions = new Repository<BuyerWalletTransaction>(context);
+        VerificationCodes = new Repository<VerificationCode>(context);
+        RefreshTokens = new Repository<RefreshToken>(context);
     }
 
     public IRepository<User> Users { get; }
@@ -56,6 +58,8 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<ReturnRequest> ReturnRequests { get; }
     public IRepository<BuyerWallet> BuyerWallets { get; }
     public IRepository<BuyerWalletTransaction> BuyerWalletTransactions { get; }
+    public IRepository<VerificationCode> VerificationCodes { get; }
+    public IRepository<RefreshToken> RefreshTokens { get; }
 
     public async Task<int> SaveChangesAsync()
         => await _context.SaveChangesAsync();

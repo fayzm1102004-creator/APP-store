@@ -1,4 +1,4 @@
-import React, { useState, useContext, useRef, useEffect } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,6 @@ import {
   Platform,
   ScrollView,
   Animated,
-  Dimensions,
   StyleSheet,
   StatusBar,
 } from 'react-native';
@@ -21,8 +20,8 @@ import { AuthContext } from '../../context/AuthContext';
 import { colors } from '../../theme/colors';
 import { useGoogleAuth } from '../../utils/googleAuth';
 import GoogleSignInButton from '../../components/GoogleSignInButton';
-
-const { width } = Dimensions.get('window');
+import { getAppConfig } from '../../api/configApi';
+import { isValidEgyptianPhone, normalizeEgyptianPhone } from '../../utils/egyptianPhone';
 
 const LoginScreen = ({ navigation }) => {
   const { t } = useTranslation();
@@ -32,18 +31,29 @@ const LoginScreen = ({ navigation }) => {
     acceptedTermsAndPrivacy: true,
   });
 
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
 
   // Animations
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
-  const logoScale = useRef(new Animated.Value(0.8)).current;
+  const [fadeAnim] = useState(() => new Animated.Value(0));
+  const [slideAnim] = useState(() => new Animated.Value(30));
+  const [logoScale] = useState(() => new Animated.Value(0.8));
 
   useEffect(() => {
+    getAppConfig()
+      .then((res) => {
+        if (res?.data?.googleEnabled != null) {
+          setGoogleEnabled(Boolean(res.data.googleEnabled));
+        }
+      })
+      .catch(() => {
+        setGoogleEnabled(false);
+      });
+
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -62,17 +72,34 @@ const LoginScreen = ({ navigation }) => {
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [fadeAnim, slideAnim, logoScale]);
 
   const handleLogin = async () => {
-    if (!email || !password) {
+    const rawIdentifier = identifier.trim();
+    if (!rawIdentifier || !password) {
       Alert.alert(t('common.error'), t('common.fillAllFields'));
       return;
     }
+
+    let cleanIdentifier = rawIdentifier;
+    if (isValidEgyptianPhone(rawIdentifier)) {
+      cleanIdentifier = normalizeEgyptianPhone(rawIdentifier);
+    }
+
     setLoading(true);
     try {
-      await login(email, password);
+      await login(cleanIdentifier, password);
     } catch (err) {
+      // Check if user is not verified yet (HTTP 403 NOT_VERIFIED)
+      if (err.response?.status === 403 && err.response?.data?.code === 'NOT_VERIFIED') {
+        const target = err.response.data.target || cleanIdentifier;
+        navigation.navigate('Verify', {
+          target,
+          maskedTarget: err.response.data.target || cleanIdentifier,
+          purpose: 'Verify',
+        });
+        return;
+      }
       Alert.alert(t('common.error'), err.response?.data?.error || err.message);
     } finally {
       setLoading(false);
@@ -90,7 +117,6 @@ const LoginScreen = ({ navigation }) => {
         end={{ x: 1, y: 1 }}
         style={styles.headerGradient}
       >
-        {/* Decorative circles */}
         <View style={styles.decorCircle1} />
         <View style={styles.decorCircle2} />
 
@@ -139,30 +165,29 @@ const LoginScreen = ({ navigation }) => {
             <Text style={styles.title}>{t('auth.loginTitle')}</Text>
             <Text style={styles.subtitle}>{t('auth.loginSubtitle')}</Text>
 
-            {/* Email input */}
+            {/* Email or Phone input */}
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>{t('auth.email')}</Text>
+              <Text style={styles.inputLabel}>{t('auth.emailOrPhone')}</Text>
               <View
                 style={[
                   styles.inputContainer,
-                  focusedField === 'email' && styles.inputFocused,
+                  focusedField === 'identifier' && styles.inputFocused,
                 ]}
               >
                 <Ionicons
-                  name="mail-outline"
+                  name="person-outline"
                   size={20}
-                  color={focusedField === 'email' ? colors.accent : colors.textSecondary}
+                  color={focusedField === 'identifier' ? colors.accent : colors.textSecondary}
                   style={styles.inputIcon}
                 />
                 <TextInput
                   style={styles.input}
-                  placeholder={t('auth.emailPlaceholder')}
+                  placeholder={t('auth.emailOrPhonePlaceholder')}
                   placeholderTextColor={colors.oldPrice}
-                  keyboardType="email-address"
                   autoCapitalize="none"
-                  value={email}
-                  onChangeText={setEmail}
-                  onFocus={() => setFocusedField('email')}
+                  value={identifier}
+                  onChangeText={setIdentifier}
+                  onFocus={() => setFocusedField('identifier')}
                   onBlur={() => setFocusedField(null)}
                 />
               </View>
@@ -205,6 +230,18 @@ const LoginScreen = ({ navigation }) => {
                   />
                 </TouchableOpacity>
               </View>
+
+              {/* Forgot password link */}
+              <TouchableOpacity
+                onPress={() =>
+                  navigation.navigate('ForgotPassword', {
+                    initialIdentifier: identifier.trim(),
+                  })
+                }
+                style={styles.forgotPasswordContainer}
+              >
+                <Text style={styles.forgotPasswordText}>{t('auth.forgotPassword')}</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Login button */}
@@ -231,22 +268,25 @@ const LoginScreen = ({ navigation }) => {
               </LinearGradient>
             </TouchableOpacity>
 
-            {/* Divider */}
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>{t('auth.orContinueWith')}</Text>
-              <View style={styles.dividerLine} />
-            </View>
+            {/* Google Sign In Button (only rendered when enabled by server config) */}
+            {googleEnabled && (
+              <>
+                <View style={styles.divider}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerText}>{t('auth.orContinueWith')}</Text>
+                  <View style={styles.dividerLine} />
+                </View>
 
-            {/* Google Sign In Button */}
-            <GoogleSignInButton
-              onPress={signInWithGoogle}
-              loading={googleLoading}
-              style={{ marginBottom: 20 }}
-            />
+                <GoogleSignInButton
+                  onPress={signInWithGoogle}
+                  loading={googleLoading}
+                  style={{ marginBottom: 20 }}
+                />
+              </>
+            )}
 
             {/* Register link */}
-            <View style={styles.bottomLink}>
+            <View style={[styles.bottomLink, !googleEnabled && { marginTop: 24 }]}>
               <Text style={styles.bottomLinkText}>{t('auth.noAccount')} </Text>
               <TouchableOpacity onPress={() => navigation.navigate('Register')}>
                 <Text style={styles.bottomLinkAction}>{t('auth.signUpNow')}</Text>
@@ -384,6 +424,15 @@ const styles = StyleSheet.create({
   eyeButton: {
     padding: 4,
   },
+  forgotPasswordContainer: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+  },
+  forgotPasswordText: {
+    fontSize: 13,
+    color: colors.accent,
+    fontWeight: '600',
+  },
   loginButton: {
     height: 54,
     borderRadius: 14,
@@ -417,22 +466,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     fontWeight: '500',
-  },
-  socialRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 16,
-    marginBottom: 24,
-  },
-  socialButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: colors.primarySoft,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   bottomLink: {
     flexDirection: 'row',

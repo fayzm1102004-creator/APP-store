@@ -24,6 +24,8 @@ public interface IUnitOfWork : IDisposable
     IRepository<ReturnRequest> ReturnRequests { get; }
     IRepository<BuyerWallet> BuyerWallets { get; }
     IRepository<BuyerWalletTransaction> BuyerWalletTransactions { get; }
+    IRepository<VerificationCode> VerificationCodes { get; }
+    IRepository<RefreshToken> RefreshTokens { get; }
 
     Task<int> SaveChangesAsync();
     Task BeginTransactionAsync();

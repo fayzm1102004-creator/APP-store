@@ -17,6 +17,7 @@
     "expo-image": "~57.0.5",
     "expo-image-picker": "^57.0.20",
     "expo-linear-gradient": "~57.0.2",
+    "expo-local-authentication": "^58.0.2",
     "expo-secure-store": "^57.0.4",
     "expo-status-bar": "~57.0.1",
     "expo-updates": "~57.0.26",
@@ -35,7 +36,9 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "i18n:check": "node scripts/check-i18n.js",
+    "test:biometrics": "node tests/test_biometric_lock_state_machine.js"
   },
   "private": true,
   "devDependencies": {

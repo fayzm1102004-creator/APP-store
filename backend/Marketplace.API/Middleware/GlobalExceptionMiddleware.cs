@@ -40,6 +40,22 @@ public class GlobalExceptionMiddleware
 
     private async Task HandleExceptionAsync(HttpContext context, Exception exception)
     {
+        if (exception is NotVerifiedException notVerified)
+        {
+            context.Response.ContentType = "application/json";
+            context.Response.StatusCode = (int)HttpStatusCode.Forbidden;
+            var notVerifiedBody = new
+            {
+                status = 403,
+                error = "NOT_VERIFIED",
+                code = "NOT_VERIFIED",
+                message = notVerified.Message,
+                target = notVerified.Target
+            };
+            await context.Response.WriteAsync(JsonSerializer.Serialize(notVerifiedBody, JsonOptions));
+            return;
+        }
+
         Dictionary<string, string[]>? errors = null;
 
         var (statusCode, message) = exception switch
@@ -50,6 +66,9 @@ public class GlobalExceptionMiddleware
             ForbiddenException => (HttpStatusCode.Forbidden, exception.Message),
             NotFoundException => (HttpStatusCode.NotFound, exception.Message),
             ConflictException => (HttpStatusCode.Conflict, exception.Message),
+            TooManyRequestsException => (HttpStatusCode.TooManyRequests, exception.Message),
+            Microsoft.EntityFrameworkCore.DbUpdateException dbEx when dbEx.InnerException is Npgsql.PostgresException { SqlState: "23505" } =>
+                (HttpStatusCode.Conflict, "A resource with this identifier already exists."),
             _ => (HttpStatusCode.InternalServerError, "An unexpected error occurred.")
         };
 

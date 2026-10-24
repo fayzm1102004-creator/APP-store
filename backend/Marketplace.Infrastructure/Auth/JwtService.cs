@@ -17,6 +17,8 @@ public class JwtService : IJwtService
         public const string Email = JwtRegisteredClaimNames.Email;
         public const string Name = "name";
         public const string Role = "role";
+        public const string TokenVersion = "token_version";
+        public const string Phone = "phone_number";
     }
 
     private readonly JwtSettings _settings;
@@ -28,8 +30,27 @@ public class JwtService : IJwtService
 
     public JwtToken GenerateToken(User user)
     {
-        var expiresAt = DateTime.UtcNow.AddDays(_settings.ExpiryDays);
+        var minutes = _settings.ExpiryMinutes > 0 ? _settings.ExpiryMinutes : 60;
+        var expiresAt = DateTime.UtcNow.AddMinutes(minutes);
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.Key));
+
+        var claims = new List<Claim>
+        {
+            new(ClaimNames.UserId, user.Id.ToString()),
+            new(ClaimNames.Name, user.Name ?? string.Empty),
+            new(ClaimNames.Role, user.Role.ToString()),
+            new(ClaimNames.TokenVersion, user.TokenVersion.ToString())
+        };
+
+        if (!string.IsNullOrEmpty(user.Email))
+        {
+            claims.Add(new Claim(ClaimNames.Email, user.Email));
+        }
+
+        if (!string.IsNullOrEmpty(user.Phone))
+        {
+            claims.Add(new Claim(ClaimNames.Phone, user.Phone));
+        }
 
         var descriptor = new SecurityTokenDescriptor
         {
@@ -37,13 +58,7 @@ public class JwtService : IJwtService
             Audience = _settings.Audience,
             Expires = expiresAt,
             SigningCredentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256),
-            Subject = new ClaimsIdentity(new[]
-            {
-                new Claim(ClaimNames.UserId, user.Id.ToString()),
-                new Claim(ClaimNames.Email, user.Email),
-                new Claim(ClaimNames.Name, user.Name),
-                new Claim(ClaimNames.Role, user.Role.ToString())
-            })
+            Subject = new ClaimsIdentity(claims)
         };
 
         var token = new JsonWebTokenHandler().CreateToken(descriptor);

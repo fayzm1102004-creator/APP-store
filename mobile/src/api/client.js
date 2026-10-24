@@ -1,21 +1,21 @@
 import axios from 'axios';
-import { NativeModules } from 'react-native';
-import { getToken, removeToken } from '../utils/storage';
+import { Platform } from 'react-native';
+import {
+  getToken,
+  setToken,
+  removeToken,
+  getRefreshToken,
+  setRefreshToken,
+  removeRefreshToken,
+  getDeviceId,
+  getLastAuthenticatedUserId,
+} from '../utils/storage';
 
-// Automatically detect the bundler host IP in Expo Go, falling back to 192.168.1.8
 const getApiHost = () => {
-  try {
-    const scriptURL = NativeModules?.SourceCode?.scriptURL;
-    if (scriptURL) {
-      const match = scriptURL.match(/^https?:\/\/([^:/]+):/);
-      if (match && match[1] && match[1] !== 'localhost' && match[1] !== '127.0.0.1') {
-        return match[1];
-      }
-    }
-  } catch (e) {
-    // fallback below
+  if (Platform.OS === 'android') {
+    return '10.0.2.2';
   }
-  return '192.168.1.8';
+  return 'localhost';
 };
 
 const getApiBaseUrl = () => {
@@ -40,48 +40,69 @@ const client = axios.create({
   },
 });
 
-const SENSITIVE_KEYS = new Set([
-  'password',
-  'currentPassword',
-  'newPassword',
-  'token',
-  'idToken',
-  'recipientPhone',
-  'contactPhone',
-  'phone',
-  'streetBuilding',
-]);
+// ─── Single-Flight Refresh Coordinator ──────────────────────
+let isRefreshing = false;
+let refreshPromise = null;
 
-const sanitizePayload = (obj) => {
-  if (!obj || typeof obj !== 'object') return obj;
-  try {
-    const copy = JSON.parse(JSON.stringify(obj));
-    const mask = (target) => {
-      if (!target || typeof target !== 'object') return;
-      Object.keys(target).forEach((key) => {
-        if (SENSITIVE_KEYS.has(key)) {
-          target[key] = '[REDACTED]';
-        } else if (typeof target[key] === 'object') {
-          mask(target[key]);
-        }
-      });
-    };
-    mask(copy);
-    return copy;
-  } catch {
-    return '[UNPARSABLE_BODY]';
+export const performSingleFlightRefresh = async () => {
+  if (isRefreshing && refreshPromise) {
+    return refreshPromise;
   }
+
+  isRefreshing = true;
+  refreshPromise = (async () => {
+    try {
+      const lastUserId = await getLastAuthenticatedUserId();
+      const refreshToken = lastUserId ? await getRefreshToken(lastUserId) : null;
+      const deviceId = await getDeviceId();
+
+      if (!refreshToken) {
+        throw new Error('No refresh token available');
+      }
+
+      // Use a clean axios instance to bypass interceptor recursion
+      const refreshResponse = await axios.post(
+        `${BASE_URL}/auth/refresh`,
+        {
+          refreshToken,
+          deviceId,
+        },
+        {
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+
+      const newAccessToken = refreshResponse.data?.accessToken || refreshResponse.data?.token;
+      const newRefreshToken = refreshResponse.data?.refreshToken;
+
+      if (!newAccessToken) {
+        throw new Error('No access token in refresh response');
+      }
+
+      // CRITICAL: Save rotated token in storage BEFORE resolving the promise
+      await setToken(newAccessToken);
+      if (newRefreshToken && lastUserId) {
+        await setRefreshToken(lastUserId, newRefreshToken);
+      }
+
+      return newAccessToken;
+    } finally {
+      isRefreshing = false;
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
 };
 
+// ─── Request Interceptor: Attach Access Token ───────────────
 client.interceptors.request.use(
   async (config) => {
     if (typeof __DEV__ === 'undefined' || __DEV__) {
-      const sanitizedData = config.data ? sanitizePayload(config.data) : null;
-      const payloadStr = sanitizedData
-        ? `Data: ${JSON.stringify(sanitizedData)}`
-        : `Params: ${JSON.stringify(config.params || {})}`;
-      console.log('[API REQUEST]', config.method?.toUpperCase(), `${config.baseURL || ''}${config.url}`, payloadStr);
+      // Zero-PII safe logging: method and url only, never payload or tokens
+      console.log('[API REQUEST]', config.method?.toUpperCase(), `${config.baseURL || ''}${config.url}`);
     }
+
     const token = await getToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -91,17 +112,65 @@ client.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// ─── Response Interceptor: Silent Token Refresh on 401 ──────
 client.interceptors.response.use(
   (response) => response,
   async (error) => {
-    // If the token expires or is invalid (401), clear token and notify AuthContext
-    if (error.response && error.response.status === 401) {
+    const originalRequest = error.config;
+
+    if (!error.response || error.response.status !== 401 || !originalRequest) {
+      return Promise.reject(error);
+    }
+
+    const url = originalRequest.url || '';
+
+    // If 401 was on refresh or login endpoint, immediately wipe credentials & log out
+    if (url.includes('/auth/refresh') || url.includes('/auth/login')) {
+      const lastUserId = await getLastAuthenticatedUserId();
       await removeToken();
+      if (lastUserId) {
+        await removeRefreshToken(lastUserId);
+      }
       if (onUnauthorizedCallback) {
         onUnauthorizedCallback();
       }
+      return Promise.reject(error);
     }
-    return Promise.reject(error);
+
+    // A second failure on a retried request logs the user out
+    if (originalRequest._retry) {
+      const lastUserId = await getLastAuthenticatedUserId();
+      await removeToken();
+      if (lastUserId) {
+        await removeRefreshToken(lastUserId);
+      }
+      if (onUnauthorizedCallback) {
+        onUnauthorizedCallback();
+      }
+      return Promise.reject(error);
+    }
+
+    // First 401 failure: mark retry and wait for single-flight refresh
+    originalRequest._retry = true;
+
+    try {
+      const newAccessToken = await performSingleFlightRefresh();
+
+      // Retry original request with the new access token
+      originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+      return client(originalRequest);
+    } catch (refreshError) {
+      // Refresh failed (e.g. revoked token reuse detection or token expired)
+      const lastUserId = await getLastAuthenticatedUserId();
+      await removeToken();
+      if (lastUserId) {
+        await removeRefreshToken(lastUserId);
+      }
+      if (onUnauthorizedCallback) {
+        onUnauthorizedCallback();
+      }
+      return Promise.reject(refreshError);
+    }
   }
 );
 

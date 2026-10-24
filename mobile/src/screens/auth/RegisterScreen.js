@@ -1,4 +1,4 @@
-import React, { useState, useContext, useRef, useEffect } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,6 @@ import {
   Platform,
   ScrollView,
   Animated,
-  Dimensions,
   StyleSheet,
   StatusBar,
 } from 'react-native';
@@ -21,15 +20,56 @@ import { AuthContext } from '../../context/AuthContext';
 import { colors } from '../../theme/colors';
 import { useGoogleAuth } from '../../utils/googleAuth';
 import GoogleSignInButton from '../../components/GoogleSignInButton';
+import { getAppConfig } from '../../api/configApi';
+import { isValidEgyptianPhone, normalizeEgyptianPhone } from '../../utils/egyptianPhone';
 
-const { width } = Dimensions.get('window');
+const RoleCard = ({ roleKey, icon, isSelected, onSelect, t }) => (
+  <TouchableOpacity
+    onPress={() => onSelect(roleKey)}
+    activeOpacity={0.8}
+    style={[styles.roleCard, isSelected && styles.roleCardSelected]}
+  >
+    {isSelected && (
+      <LinearGradient
+        colors={[colors.accent, '#FF8C33']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+      />
+    )}
+    <View style={[styles.roleIconWrap, isSelected && styles.roleIconWrapSelected]}>
+      <Ionicons
+        name={icon}
+        size={24}
+        color={isSelected ? colors.accent : colors.textSecondary}
+      />
+    </View>
+    <Text style={[styles.roleTitle, isSelected && styles.roleTitleSelected]}>
+      {t(`auth.role${roleKey}`)}
+    </Text>
+    <Text style={[styles.roleSub, isSelected && styles.roleSubSelected]}>
+      {t(`auth.roleSub${roleKey}`)}
+    </Text>
+    {isSelected && (
+      <View style={styles.roleCheck}>
+        <Ionicons name="checkmark-circle" size={22} color="#fff" />
+      </View>
+    )}
+  </TouchableOpacity>
+);
 
 const RegisterScreen = ({ navigation }) => {
   const { t } = useTranslation();
   const { register } = useContext(AuthContext);
 
+  const [signupMethod, setSignupMethod] = useState('email'); // 'email' | 'phone'
+  const [phoneSignupEnabled, setPhoneSignupEnabled] = useState(false);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
+
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('Buyer');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -53,11 +93,27 @@ const RegisterScreen = ({ navigation }) => {
   };
 
   // Animations
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
-  const logoScale = useRef(new Animated.Value(0.8)).current;
+  const [fadeAnim] = useState(() => new Animated.Value(0));
+  const [slideAnim] = useState(() => new Animated.Value(30));
+  const [logoScale] = useState(() => new Animated.Value(0.8));
 
   useEffect(() => {
+    getAppConfig()
+      .then((res) => {
+        if (res?.data) {
+          if (res.data.googleEnabled != null) {
+            setGoogleEnabled(Boolean(res.data.googleEnabled));
+          }
+          if (res.data.phoneSignupEnabled != null) {
+            setPhoneSignupEnabled(Boolean(res.data.phoneSignupEnabled));
+          }
+        }
+      })
+      .catch(() => {
+        setGoogleEnabled(false);
+        setPhoneSignupEnabled(false);
+      });
+
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -76,20 +132,61 @@ const RegisterScreen = ({ navigation }) => {
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [fadeAnim, slideAnim, logoScale]);
 
   const handleRegister = async () => {
-    if (!name || !email || !password) {
+    if (!name.trim()) {
       Alert.alert(t('common.error'), t('common.fillAllFields'));
       return;
     }
+
+    let targetEmail = null;
+    let targetPhone = null;
+
+    if (signupMethod === 'phone') {
+      const cleanPhone = phone.trim();
+      if (!cleanPhone || !isValidEgyptianPhone(cleanPhone)) {
+        Alert.alert(t('common.error'), t('common.invalidPhone'));
+        return;
+      }
+      targetPhone = normalizeEgyptianPhone(cleanPhone);
+    } else {
+      const cleanEmail = email.trim();
+      if (!cleanEmail || !cleanEmail.includes('@')) {
+        Alert.alert(t('common.error'), t('common.fillAllFields'));
+        return;
+      }
+      targetEmail = cleanEmail;
+    }
+
+    if (!password || password.length < 6) {
+      Alert.alert(t('common.error'), t('auth.passwordMinLength'));
+      return;
+    }
+
     if (!acceptedTerms) {
       Alert.alert(t('common.error'), t('auth.mustAgreeTerms'));
       return;
     }
+
     setLoading(true);
     try {
-      await register(name, email, password, role, acceptedTerms, marketingConsent);
+      const res = await register({
+        name: name.trim(),
+        email: targetEmail,
+        phone: targetPhone,
+        password,
+        role,
+        acceptedTermsAndPrivacy: acceptedTerms,
+        marketingConsent,
+      });
+
+      const target = res?.target || (signupMethod === 'phone' ? targetPhone : targetEmail);
+      navigation.navigate('Verify', {
+        target,
+        maskedTarget: res?.target || target,
+        purpose: 'Verify',
+      });
     } catch (err) {
       let msg = err.response?.data?.error || err.message;
       if (err.response?.data?.errors) {
@@ -102,57 +199,17 @@ const RegisterScreen = ({ navigation }) => {
     }
   };
 
-  const RoleCard = ({ roleKey, icon, isSelected }) => (
-    <TouchableOpacity
-      onPress={() => setRole(roleKey)}
-      activeOpacity={0.8}
-      style={[
-        styles.roleCard,
-        isSelected && styles.roleCardSelected,
-      ]}
-    >
-      {isSelected && (
-        <LinearGradient
-          colors={[colors.accent, '#FF8C33']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={StyleSheet.absoluteFill}
-          pointerEvents="none"
-        />
-      )}
-      <View style={[styles.roleIconWrap, isSelected && styles.roleIconWrapSelected]}>
-        <Ionicons
-          name={icon}
-          size={24}
-          color={isSelected ? colors.accent : colors.textSecondary}
-        />
-      </View>
-      <Text style={[styles.roleTitle, isSelected && styles.roleTitleSelected]}>
-        {t(`auth.role${roleKey}`)}
-      </Text>
-      <Text style={[styles.roleSub, isSelected && styles.roleSubSelected]}>
-        {t(`auth.roleSub${roleKey}`)}
-      </Text>
-      {isSelected && (
-        <View style={styles.roleCheck}>
-          <Ionicons name="checkmark-circle" size={22} color="#fff" />
-        </View>
-      )}
-    </TouchableOpacity>
-  );
-
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* Top gradient header — compact for register */}
+      {/* Top gradient header */}
       <LinearGradient
         colors={['#0F172A', '#1E3A5F', '#0F172A']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.headerGradient}
       >
-        {/* Back button */}
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
@@ -161,7 +218,6 @@ const RegisterScreen = ({ navigation }) => {
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
 
-        {/* Decorative circles */}
         <View style={styles.decorCircle1} />
         <View style={styles.decorCircle2} />
 
@@ -211,9 +267,75 @@ const RegisterScreen = ({ navigation }) => {
             {/* Role selection */}
             <Text style={styles.sectionLabel}>{t('auth.chooseRole')}</Text>
             <View style={styles.roleRow}>
-              <RoleCard roleKey="Buyer" icon="cart-outline" isSelected={role === 'Buyer'} />
-              <RoleCard roleKey="Seller" icon="storefront-outline" isSelected={role === 'Seller'} />
+              <RoleCard
+                roleKey="Buyer"
+                icon="cart-outline"
+                isSelected={role === 'Buyer'}
+                onSelect={setRole}
+                t={t}
+              />
+              <RoleCard
+                roleKey="Seller"
+                icon="storefront-outline"
+                isSelected={role === 'Seller'}
+                onSelect={setRole}
+                t={t}
+              />
             </View>
+
+            {/* Email / Phone Method Toggle (Only if phoneSignupEnabled) */}
+            {phoneSignupEnabled && (
+              <View style={styles.methodToggleContainer}>
+                <Text style={styles.sectionLabel}>{t('auth.chooseMethod')}</Text>
+                <View style={styles.toggleRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.toggleButton,
+                      signupMethod === 'email' && styles.toggleButtonActive,
+                    ]}
+                    onPress={() => setSignupMethod('email')}
+                  >
+                    <Ionicons
+                      name="mail-outline"
+                      size={18}
+                      color={signupMethod === 'email' ? '#fff' : colors.textSecondary}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text
+                      style={[
+                        styles.toggleButtonText,
+                        signupMethod === 'email' && styles.toggleButtonTextActive,
+                      ]}
+                    >
+                      {t('auth.registerWithEmail')}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.toggleButton,
+                      signupMethod === 'phone' && styles.toggleButtonActive,
+                    ]}
+                    onPress={() => setSignupMethod('phone')}
+                  >
+                    <Ionicons
+                      name="call-outline"
+                      size={18}
+                      color={signupMethod === 'phone' ? '#fff' : colors.textSecondary}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text
+                      style={[
+                        styles.toggleButtonText,
+                        signupMethod === 'phone' && styles.toggleButtonTextActive,
+                      ]}
+                    >
+                      {t('auth.registerWithPhone')}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
 
             {/* Name input */}
             <View style={styles.inputGroup}>
@@ -242,34 +364,63 @@ const RegisterScreen = ({ navigation }) => {
               </View>
             </View>
 
-            {/* Email input */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>{t('auth.email')}</Text>
-              <View
-                style={[
-                  styles.inputContainer,
-                  focusedField === 'email' && styles.inputFocused,
-                ]}
-              >
-                <Ionicons
-                  name="mail-outline"
-                  size={20}
-                  color={focusedField === 'email' ? colors.accent : colors.textSecondary}
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder={t('auth.emailPlaceholder')}
-                  placeholderTextColor={colors.oldPrice}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  value={email}
-                  onChangeText={setEmail}
-                  onFocus={() => setFocusedField('email')}
-                  onBlur={() => setFocusedField(null)}
-                />
+            {/* Email OR Phone input depending on signupMethod */}
+            {signupMethod === 'phone' && phoneSignupEnabled ? (
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>{t('auth.phone')}</Text>
+                <View
+                  style={[
+                    styles.inputContainer,
+                    focusedField === 'phone' && styles.inputFocused,
+                  ]}
+                >
+                  <Ionicons
+                    name="call-outline"
+                    size={20}
+                    color={focusedField === 'phone' ? colors.accent : colors.textSecondary}
+                    style={styles.inputIcon}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder={t('auth.phonePlaceholder')}
+                    placeholderTextColor={colors.oldPrice}
+                    keyboardType="phone-pad"
+                    value={phone}
+                    onChangeText={setPhone}
+                    onFocus={() => setFocusedField('phone')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </View>
               </View>
-            </View>
+            ) : (
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>{t('auth.email')}</Text>
+                <View
+                  style={[
+                    styles.inputContainer,
+                    focusedField === 'email' && styles.inputFocused,
+                  ]}
+                >
+                  <Ionicons
+                    name="mail-outline"
+                    size={20}
+                    color={focusedField === 'email' ? colors.accent : colors.textSecondary}
+                    style={styles.inputIcon}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder={t('auth.emailPlaceholder')}
+                    placeholderTextColor={colors.oldPrice}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    value={email}
+                    onChangeText={setEmail}
+                    onFocus={() => setFocusedField('email')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </View>
+              </View>
+            )}
 
             {/* Password input */}
             <View style={styles.inputGroup}>
@@ -363,19 +514,22 @@ const RegisterScreen = ({ navigation }) => {
               </LinearGradient>
             </TouchableOpacity>
 
-            {/* Divider */}
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>{t('auth.orContinueWith')}</Text>
-              <View style={styles.dividerLine} />
-            </View>
+            {/* Google Register button (only rendered when enabled by server config) */}
+            {googleEnabled && (
+              <>
+                <View style={styles.divider}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerText}>{t('auth.orContinueWith')}</Text>
+                  <View style={styles.dividerLine} />
+                </View>
 
-            {/* Google Register button */}
-            <GoogleSignInButton
-              onPress={handleGoogleRegister}
-              loading={googleLoading}
-              style={{ marginBottom: 4 }}
-            />
+                <GoogleSignInButton
+                  onPress={handleGoogleRegister}
+                  loading={googleLoading}
+                  style={{ marginBottom: 4 }}
+                />
+              </>
+            )}
 
             {/* Terms */}
             <Text style={styles.termsText}>{t('auth.agreeTerms')}</Text>
@@ -495,7 +649,7 @@ const styles = StyleSheet.create({
   roleRow: {
     flexDirection: 'row',
     gap: 12,
-    marginBottom: 22,
+    marginBottom: 20,
   },
   roleCard: {
     flex: 1,
@@ -546,6 +700,35 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 8,
     right: 8,
+  },
+  methodToggleContainer: {
+    marginBottom: 18,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.primarySoft,
+    borderRadius: 12,
+    padding: 4,
+    gap: 4,
+  },
+  toggleButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  toggleButtonActive: {
+    backgroundColor: colors.accent,
+  },
+  toggleButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  toggleButtonTextActive: {
+    color: '#fff',
   },
   inputGroup: {
     marginBottom: 16,

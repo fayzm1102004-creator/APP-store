@@ -8,7 +8,10 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "السماح بالدخول السريع والآمن بالبصمة / Allow Face ID for quick and secure biometric login"
+      }
     },
     "android": {
       "package": "com.marketplace.app",
@@ -25,7 +28,19 @@
     "plugins": [
       "expo-image",
       "expo-web-browser",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "السماح بالدخول السريع والآمن بالبصمة / Allow Face ID for quick and secure biometric login"
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "السماح بالدخول السريع والآمن بالبصمة / Allow Face ID for quick and secure biometric login"
+        }
+      ]
     ],
     "extra": {
       "supportsRTL": true

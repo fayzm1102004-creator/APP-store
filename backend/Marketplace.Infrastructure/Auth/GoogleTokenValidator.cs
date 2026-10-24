@@ -25,32 +25,30 @@ public class GoogleTokenValidator : IGoogleTokenValidator
             throw new BadRequestException("Google ID Token is empty or missing.");
         }
 
-        // Support mock/test tokens for dev and automated test suites
-        if (idToken.StartsWith("mock-google-token:", StringComparison.OrdinalIgnoreCase))
-        {
-            var parts = idToken.Split(':');
-            var mockEmail = parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1]) ? parts[1] : "googleuser@example.com";
-            var mockName = parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2]) ? parts[2] : "Google User";
-
-            return new GoogleUserInfo
-            {
-                GoogleId = "mock-google-sub-" + Guid.NewGuid().ToString("N")[..8],
-                Email = mockEmail,
-                Name = mockName,
-                EmailVerified = true
-            };
-        }
-
         try
         {
             var settings = new GoogleJsonWebSignature.ValidationSettings();
 
-            var clientId = _configuration["Google:ClientId"]
-                ?? _configuration["Authentication:Google:ClientId"];
-
-            if (!string.IsNullOrWhiteSpace(clientId))
+            var clientIds = new List<string>();
+            var configuredArray = _configuration.GetSection("Google:ClientIds").Get<string[]>()
+                ?? _configuration.GetSection("Auth:GoogleClientIds").Get<string[]>();
+            if (configuredArray != null)
             {
-                settings.Audience = new[] { clientId };
+                clientIds.AddRange(configuredArray.Where(c => !string.IsNullOrWhiteSpace(c)));
+            }
+
+            foreach (var key in new[] { "Google:ClientId", "Authentication:Google:ClientId", "Auth:GoogleClientId" })
+            {
+                var val = _configuration[key];
+                if (!string.IsNullOrWhiteSpace(val) && !clientIds.Contains(val))
+                {
+                    clientIds.Add(val);
+                }
+            }
+
+            if (clientIds.Count > 0)
+            {
+                settings.Audience = clientIds;
             }
 
             var payload = await GoogleJsonWebSignature.ValidateAsync(idToken, settings);
@@ -58,6 +56,16 @@ public class GoogleTokenValidator : IGoogleTokenValidator
             if (payload is null || string.IsNullOrWhiteSpace(payload.Email))
             {
                 throw new UnauthorizedException("Google authentication failed: token did not contain a valid email.");
+            }
+
+            if (!payload.EmailVerified)
+            {
+                throw new UnauthorizedException("Google authentication failed: account email is not verified.");
+            }
+
+            if (clientIds.Count > 0 && (payload.Audience == null || !clientIds.Contains(payload.Audience.ToString() ?? string.Empty)))
+            {
+                throw new UnauthorizedException("Google authentication failed: token audience does not match configured client IDs.");
             }
 
             return new GoogleUserInfo
@@ -69,14 +77,14 @@ public class GoogleTokenValidator : IGoogleTokenValidator
                 EmailVerified = payload.EmailVerified
             };
         }
-        catch (InvalidJwtException ex)
+        catch (InvalidJwtException)
         {
-            _logger.LogWarning("Invalid Google JWT: {Message}", ex.Message);
+            _logger.LogWarning("Invalid or expired Google JWT token.");
             throw new UnauthorizedException("Invalid or expired Google token.");
         }
         catch (Exception ex) when (ex is not AppException)
         {
-            _logger.LogError(ex, "Unexpected error validating Google token.");
+            _logger.LogError("Unexpected error occurred while validating Google token.");
             throw new UnauthorizedException("Failed to verify Google token with provider.");
         }
     }

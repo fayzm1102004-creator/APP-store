@@ -90,27 +90,18 @@ export const useGoogleAuth = ({
       return;
     }
 
-    // In local development when Google Cloud Client ID is not yet configured in .env,
-    // offer a seamless dev simulation so the user/developer can verify the full auth flow immediately.
-    const isAr = !i18n.language || i18n.language.startsWith('ar');
+    // Outside __DEV__, demo dialog is completely removed
+    if (typeof __DEV__ === 'undefined' || !__DEV__) {
+      Alert.alert(
+        i18n.t('common.error'),
+        i18n.t('auth.googleAuthUnavailable', { defaultValue: 'Google Sign-In is currently unavailable.' })
+      );
+      return;
+    }
+
     Alert.alert(
-      isAr ? 'تسجيل الدخول بجوجل (وضع التطوير)' : 'Google Sign-In (Dev Simulation)',
-      isAr
-        ? 'لم يتم تعيين معرّف Google Client ID في ملف الإعدادات (.env) بعد.\nهل ترغب في تسجيل الدخول كحساب تجريبي لاختبار التطبيق؟'
-        : 'Google Client ID is not configured in .env yet.\nWould you like to simulate Google sign-in with a test account?',
-      [
-        {
-          text: i18n.t('common.cancel'),
-          style: 'cancel',
-        },
-        {
-          text: isAr ? 'دخول تجريبي بجوجل' : 'Demo Google Sign-In',
-          onPress: async () => {
-            const mockToken = `mock-google-token:user_${Date.now().toString().slice(-4)}@gmail.com:${isAr ? 'مستخدم تجريبي' : 'Demo User'}`;
-            await handleToken(mockToken);
-          },
-        },
-      ]
+      i18n.t('common.error'),
+      i18n.t('auth.googleAuthUnavailable', { defaultValue: 'Google Sign-In is not configured.' })
     );
   };
 

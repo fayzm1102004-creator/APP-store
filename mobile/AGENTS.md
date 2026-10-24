@@ -1,3 +1,18 @@
+# Egyptian Marketplace Mobile Application
+
+## Project Paths
+- **Repository Root**: `D:\Backend\marketplace`
+- **Backend Project Folder**: `D:\Backend\marketplace\backend`
+- **Mobile Project Folder**: `D:\Backend\marketplace\mobile`
+
+## Global Rules
+1. Work only in the single unified project folders (`D:\Backend\marketplace\backend` and `D:\Backend\marketplace\mobile`).
+2. NEVER run database commands (no `dotnet ef database update/drop`, `psql`, `pg_dump`). Generate migrations only, show the SQL for the user to apply.
+3. Tests run only against the database named in the env var `TEST_DB` (or InMemory).
+4. Do NOT deploy anything; the hosting platform is paused. Local work only.
+5. Never print or commit secrets. Secrets come from environment variables.
+6. Execute ONE stage at a time. After each stage report: files changed, endpoints added, raw test output, and what could NOT be verified. Then STOP and wait for confirmation.
+
 This is an Expo/React Native mobile application. Prioritize mobile-first patterns, performance, and cross-platform compatibility.
 
 ## Expo has changed — do not trust your training data
@@ -39,3 +54,8 @@ Docs: https://docs.expo.dev/eas/index.md
 - If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
 - Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
 - Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+
+## Biometric Security Architecture & Token Binding
+- **UI-Level Lock**: The biometric gate (`isLocked` / `UnlockScreen`) operates as an application UI-level lock.
+- **Token Storage**: The refresh token is stored encrypted via `expo-secure-store` (`Keychain` on iOS, `KeyStore/EncryptedSharedPreferences` on Android) without hardware key-binding (`requireAuthentication: false`).
+- **No Hardware Biometric Key Binding**: The refresh token is NOT cryptographically bound to hardware biometric sensor keys. Enrolling or removing fingerprints at the OS level does not automatically invalidate or wipe the stored refresh token in SecureStore. The app guards UI visibility and requires biometric authentication before presenting the app or calling `/auth/refresh` on cold starts.

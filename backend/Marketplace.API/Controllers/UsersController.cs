@@ -14,19 +14,28 @@ public class UsersController : ControllerBase
 {
     private readonly IUserService _userService;
     private readonly IWalletService _walletService;
+    private readonly IConfiguration _configuration;
 
-    public UsersController(IUserService userService, IWalletService walletService)
+    public UsersController(IUserService userService, IWalletService walletService, IConfiguration configuration)
     {
         _userService = userService;
         _walletService = walletService;
+        _configuration = configuration;
     }
 
     /// <summary>Get buyer in-app store credit wallet and transaction history.</summary>
     [HttpGet("me/wallet")]
     [Authorize]
     [ProducesResponseType(typeof(Marketplace.Application.DTOs.Wallet.BuyerWalletResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<Marketplace.Application.DTOs.Wallet.BuyerWalletResponse>> GetMyWallet()
     {
+        var walletEnabled = _configuration.GetValue<bool>("Features:WalletEnabled", false) || _configuration.GetValue<bool>("Wallet:Enabled", false);
+        if (!walletEnabled)
+        {
+            return NotFound(new { error = "Wallet feature is disabled." });
+        }
+
         var userId = User.GetUserId();
         var wallet = await _walletService.GetBuyerWalletAsync(userId);
         return Ok(wallet);

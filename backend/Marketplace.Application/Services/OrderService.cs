@@ -35,8 +35,14 @@ public class OrderService : IOrderService
             throw new BadRequestException("Order must contain at least one item.");
 
         var buyer = await _uow.Users.GetByIdAsync(buyerId);
-        if (buyer == null || buyer.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase))
+        if (buyer == null || (buyer.Email != null && buyer.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase)))
             throw new UnauthorizedException("الحساب غير موجود أو تم حذفه.");
+
+        var requireVerification = _configuration.GetValue<bool>("Auth:RequireVerification", true);
+        if (requireVerification && buyer.EmailVerifiedAt == null && buyer.PhoneVerifiedAt == null)
+        {
+            throw new ForbiddenException("يجب تأكيد البريد الإلكتروني أو رقم الهاتف لإتمام الطلب (User must have a verified email or phone to place orders).");
+        }
 
         if (!Enum.TryParse<DeliveryMethod>(request.DeliveryMethod, true, out var deliveryMethod))
             throw new BadRequestException("DeliveryMethod must be 'Pickup' or 'Courier'.");
@@ -464,7 +470,7 @@ public class OrderService : IOrderService
     public async Task<IEnumerable<OrderResponse>> GetBuyerOrdersAsync(int buyerId)
     {
         var buyer = await _uow.Users.GetByIdAsync(buyerId);
-        if (buyer == null || buyer.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase))
+        if (buyer == null || (buyer.Email != null && buyer.Email.StartsWith("deleted_", StringComparison.OrdinalIgnoreCase)))
             throw new UnauthorizedException("الحساب غير موجود أو تم حذفه.");
 
         var orders = (await _uow.Orders.FindAsync(o => o.BuyerId == buyerId))
